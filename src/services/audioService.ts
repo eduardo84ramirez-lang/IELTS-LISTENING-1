@@ -66,46 +66,70 @@ export async function generateIeltsAudio(script: string, isMultiSpeaker: boolean
     responseModalities: ['AUDIO'],
   };
 
-  if (isMultiSpeaker && speakers) {
-    config.speechConfig = {
-      multiSpeakerVoiceConfig: {
-        speakerVoiceConfigs: speakers.map(s => ({
-          speaker: s.name,
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: s.voice }
-          }
-        }))
-      }
-    };
-  } else {
-    config.speechConfig = {
-      voiceConfig: {
-        prebuiltVoiceConfig: { voiceName: 'Zephyr' },
-      },
-    };
-  }
+  const getAudio = async (useMultiSpeaker: boolean) => {
+    const currentConfig = { ...config };
+    if (useMultiSpeaker && speakers) {
+      currentConfig.speechConfig = {
+        multiSpeakerVoiceConfig: {
+          speakerVoiceConfigs: speakers.map(s => ({
+            speaker: s.name,
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: s.voice }
+            }
+          }))
+        }
+      };
+    } else {
+      currentConfig.speechConfig = {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: 'Zephyr' },
+        },
+      };
+    }
 
-  const prompt = isMultiSpeaker 
-    ? `TTS the following conversation between the speakers. Make sure to distinguish their voices clearly:\n${script}`
-    : `TTS the following text clearly and at a moderate pace for an IELTS listening test. Use a professional, academic tone:\n${script}`;
+    const prompt = useMultiSpeaker 
+      ? `TTS the following conversation between the speakers. Make sure to distinguish their voices clearly:\n${script}`
+      : `TTS the following text clearly and at a moderate pace for an IELTS listening test. Use a professional, academic tone:\n${script}`;
 
-  try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: prompt }] }],
-      config: config,
+      config: currentConfig,
     });
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) {
-      console.error("No audio data in response:", response);
       throw new Error("The model did not return any audio data.");
     }
+    return base64Audio;
+  };
 
-    // Gemini TTS returns raw PCM (16-bit, mono, 24kHz)
-    return pcmToWav(base64Audio, 24000);
-  } catch (error: any) {
-    console.error("Gemini TTS Error:", error);
-    throw new Error(error.message || "Failed to generate audio via Gemini API.");
+  // Retry logic with fallback
+  let lastError: any = null;
+  const maxRetries = 2;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // On first attempt, try multi-speaker if requested. 
+      // On subsequent attempts or if it fails, we might try single speaker as fallback.
+      const useMulti = attempt === 0 ? isMultiSpeaker : false;
+      const base64Audio = await getAudio(useMulti);
+      return pcmToWav(base64Audio, 24000);
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`Attempt ${attempt + 1} failed:`, error);
+      
+      // If it's a 500 error, wait a bit before retrying
+      if (error.message?.includes('500') || error.message?.includes('INTERNAL')) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
+      }
+      
+      // For other errors, throw immediately
+      throw error;
+    }
   }
+
+  console.error("Gemini TTS Final Error after retries:", lastError);
+  throw new Error("The AI service is currently experiencing issues (500 Internal Error). Please try again in a few moments.");
 }
