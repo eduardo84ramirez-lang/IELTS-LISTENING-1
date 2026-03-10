@@ -31,6 +31,7 @@ export default function App() {
   const [isFinished, setIsFinished] = useState(false);
   const [audioUrls, setAudioUrls] = useState<Record<number, string>>({});
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -44,15 +45,20 @@ export default function App() {
   };
 
   const loadAudio = async (index: number) => {
-    if (audioUrls[index]) return;
+    if (audioUrls[index]) {
+      setAudioError(null);
+      return;
+    }
     
     setIsLoadingAudio(true);
+    setAudioError(null);
     try {
       const section = ieltsTestData[index];
       const url = await generateIeltsAudio(section.script, section.isMultiSpeaker, section.speakers);
       setAudioUrls(prev => ({ ...prev, [index]: url }));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Audio generation failed:", error);
+      setAudioError(error.message || "Failed to load audio. Please check your connection or API key.");
     } finally {
       setIsLoadingAudio(false);
     }
@@ -285,6 +291,19 @@ export default function App() {
                 <div className="flex items-center gap-3 text-[#5A5A40]">
                   <Loader2 className="animate-spin" size={24} />
                   <span className="font-medium">Generating audio...</span>
+                </div>
+              ) : audioError ? (
+                <div className="flex flex-col gap-1 text-red-600">
+                  <div className="flex items-center gap-2">
+                    <XCircle size={20} />
+                    <span className="font-bold text-sm">Error loading audio</span>
+                  </div>
+                  <button 
+                    onClick={() => loadAudio(currentSectionIndex)}
+                    className="text-xs underline text-left hover:text-red-800"
+                  >
+                    Try again
+                  </button>
                 </div>
               ) : (
                 <>
